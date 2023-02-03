@@ -1,0 +1,525 @@
+---
+title: 'DPSS Capstone, Social Inequality: George Floyd Protests'
+author: "Chanteria Milner"
+date: '2021-08-03'
+output: pdf_document
+---
+
+```{r setup, echo=FALSE, include=FALSE}
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(usmap)
+library(readxl)
+library(viridis)
+library(formatR)
+library(kableExtra)
+library(reshape2)
+library(stargazer)
+knitr::opts_chunk$set(echo = TRUE, comment=NA, tidy.opts=list(width.cutoff=60),tidy=TRUE)
+
+setwd("[INSERT WORKING DIRECTORY]")
+```
+
+
+## Task 1 - Setup
+
+```{r setup2, include=FALSE, echo=FALSE, message=FALSE}
+# Set up for census data
+library(jsonlite)   # For reading raw JSON
+library(tidycensus) # For downloading U.S. Census data
+census_api_key("[INSERT API KEY]", install = TRUE, overwrite=TRUE)
+readRenviron("~/.Renviron")
+Sys.getenv("CENSUS_API_KEY")
+```
+
+```{r message=FALSE, warning=FALSE}
+# reading in relevant data - base
+protests <- read_csv("data/george-floyd-exports-june-22.csv")
+us_counties <- st_read("data/tl_2016_us_county/tl_2016_us_county.shp")
+```
+
+```{r message=FALSE, warning=FALSE}
+# getting gini index data
+vote_2020 <- read_excel("data/vote2020.xlsx")
+vars_acs_2019 <- load_variables(2019, "acs5")
+gini_index <- get_acs( # note: 0 = no inequality, 1 = complete inequality
+  geography = "county",
+  variables = c("B19083_001"),
+  year = 2019
+)
+gini_index <- gini_index %>%
+  select(-variable)
+```
+
+```{r message = FALSE}
+# getting parler data
+parler_data <- read_csv("data/parler-videos-geocoded.csv")
+```
+
+## Task 2 - Generating Maps
+### PART 1 - Sub-setting protest data for variables of interest
+
+```{r}
+protests_map <- protests %>%
+  select(longitude, latitude, type_of_gathering, state, 
+         escalation, police_altercation) %>%
+  mutate(
+    size = case_when(
+    protests$size == "Large" ~ 2,
+    protests$size == "Moderate" ~ 1,
+    protests$size == "Small" ~ 0),
+    type_of_gathering = ifelse(protests$type_of_gathering=="Protests", 0, 1))
+```
+
+### PART 2 - Mapping Data
+
+```{r message=FALSE, warning=FALSE}
+protests_map_trans <- usmap_transform(protests_map) # transform for usmaps
+
+protests_map_trans <- # remove data Hawaii and Alaska
+  protests_map_trans[protests_map_trans$state !="Hawaii" & 
+                       protests_map_trans$state !="Alaska",]
+```
+
+#### 2a: Mapping general location of protests across the us
+
+```{r echo=FALSE, out.width="80%", fig.align='center'}
+plot_usmap(fill="darkolivegreen", alpha=0.35, color="white", exclude=c("AK", "HI")) +
+  geom_point(data=protests_map_trans, aes(x=longitude.1, y=latitude.1),
+             color = "darkblue", alpha = 0.25, size=2) +
+  theme(
+    panel.background = element_rect(color = "black", fill = "aliceblue"),
+    plot.title = element_text(size=14),
+    plot.subtitle = element_text(size=12),
+    ) +
+  labs (
+    title = "Location of George Floyd Protests, Summer 2020",
+    subtitle = "Source: Ipsos")
+```
+
+#### 2b: Mapping protest across the us by size
+
+```{r echo=FALSE, out.width="80%", fig.align='center'}
+plot_usmap(fill="darkolivegreen", alpha=0.35, color="white", exclude=c("AK", "HI")) +
+  geom_point(data=na.omit(protests_map_trans), aes(x=longitude.1, y=latitude.1, 
+                                                   size=size, color=factor(size)),
+             alpha = 0.5) +
+  scale_size_continuous(
+    name = "Size of Protest",
+    breaks = c(0,1,2),
+    range = c(1, 3),
+    labels = c("Small", "Moderate", "Large")
+  ) +
+  scale_color_manual (
+    name = "Size of Protest",
+    values = c("black", "blue", "firebrick2"),
+    labels = c("Small", "Moderate", "Large"),
+  ) +
+  theme(
+    panel.background = element_rect(color = "black", fill = "aliceblue"),
+    plot.title = element_text(size=14),
+    plot.subtitle = element_text(size=12),
+    legend.text = element_text(size=10),
+    legend.title = element_text(size=11),
+    legend.background = element_rect(color="black")
+    ) +
+  labs(
+    title = "Location of George Floyd Protests by Size, Summer 2020",
+    subtitle = "Source: Ipsos",
+    size = "Size of Protests"
+  )
+```
+
+#### 2c: Mapping protest by if they escalated to violence
+
+```{r echo=FALSE, out.width="80%", fig.align='center'}
+plot_usmap(fill="darkolivegreen", alpha=0.35, color="white", exclude=c("AK", "HI")) +
+  geom_point(data=protests_map_trans, 
+             aes(x=longitude.1, y=latitude.1, color=factor(escalation),
+                 shape=factor(escalation)
+                 ), 
+             size=2) +
+  scale_color_manual (
+    name = waiver(),
+    values = c("darkblue", "red"),
+    labels = c("Protests", "Protests that Escalated to Violence")
+    ) +
+  scale_shape_manual(
+    name = waiver(),
+    values = c(20, 17),
+    labels = c("Protests", "Protests that Escalated to Violence")
+  ) + 
+  theme(
+    panel.background = element_rect(color = "black", fill = "aliceblue"),
+    legend.title = element_blank(),
+    plot.title = element_text(size=14),
+    plot.subtitle = element_text(size=12),
+    legend.text = element_text(size=10),
+    legend.background = element_rect(color="black")
+    ) +
+  labs(
+    title = "George Floyd Protests by Escalation to Violence, Summer 2020",
+    subtitle = "Source: Ipsos")
+```
+
+#### 2d: Mapping protest by if they had police violence
+
+```{r echo=FALSE, out.width="90%", fig.align='center'}
+protests_map_trans_p <- # remove if police violence not recorded
+  protests_map_trans[protests_map_trans$police_altercation !="Not recorded",]
+
+protests_map_trans_p <- protests_map_trans_p %>%
+  mutate(police_altercation = case_when (
+    police_altercation == "No" ~ "Protests",
+    police_altercation == "Yes" ~ "Protests with Police Altercation"
+  ))
+
+plot_usmap(fill="darkolivegreen", alpha=0.35, color="white", exclude=c("AK", "HI")) +
+  geom_point(data=protests_map_trans_p, aes(x=longitude.1, y=latitude.1, 
+                                          color=factor(police_altercation), 
+                                          shape=factor(police_altercation)),
+             size=2, alpha=0.35) +
+  facet_wrap(
+    ~police_altercation
+    )+
+  scale_color_manual (
+    name = waiver(),
+    values = c("darkblue", "red"),
+  ) +
+  scale_shape_manual(
+    name = waiver(),
+    values = c(20, 17),
+  ) +
+  theme(
+    panel.background = element_rect(color = "black", fill = "aliceblue"),
+    legend.position = "none",
+    strip.text.x = element_text(size = 10),
+    plot.title = element_text(size=11),
+    plot.subtitle = element_text(size=9)
+    ) +
+  labs(
+    title = "George Floyd Protests by Police Altercation, Summer 2020",
+    subtitle = "Source: Ipsos",
+  )
+```
+
+## Task 3 - Running Regressions
+
+```{r setup3, include=FALSE, warning=FALSE, message=FALSE}
+# Set up - packages for creating tables from regression results
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+```
+
+### PART 1 - Collapsing and generating variables
+#### 1a: Retrieving county names for protest data
+
+```{r}
+protests_geom <- protests %>% # choosing variables of interest
+  select(longitude, latitude, escalation) %>%
+  mutate(escalation = ifelse(escalation=="No", 0, 1))
+
+protests_geom <- st_as_sf( # generating correct geom cat for county data join
+  protests_geom,
+  coords = c("longitude", "latitude"),
+  crs = 4326)
+
+counties_sub <- us_counties %>% # subsetting county data set
+  select(fips, STATEFP) 
+
+counties_sub <- st_transform(counties_sub, 4326) # for merge with protest data
+
+protests_geom <- st_join( # joining protest and county to get protest/county
+  protests_geom,
+  counties_sub,
+  join = st_within
+)
+```
+
+#### 1b: calculating num protests + escalations that escalated per County
+
+```{r warning=FALSE, message=FALSE}
+protests_geom$fips <- as.character(protests_geom$fips) # makes grouping by fips easier
+protests_geom <- protests_geom %>%
+  select(-STATEFP) # will add back later
+
+protests_geom <- protests_geom %>%
+  select(escalation, fips) %>% 
+  add_count(fips) %>% # creates count variable of num protests that happened
+  rename(num_protests = n) %>% # renames count variable
+  select(escalation, fips, num_protests) %>%
+  group_by(fips, num_protests) %>% 
+  summarise(num_escalations = sum(escalation)) # creates count of escalations
+```
+
+### PART 2 - Joining new variables with county-level voting data
+#### 2a: cleaning county name and fips code in vote data
+
+```{r}
+vote_2020 <- vote_2020 %>%
+  rename(County = county_name,
+         fips = county_fips)
+
+vote_2020$fips <- as.character(vote_2020$fips) # makes joining easier
+```
+
+#### 2b: joining voting data with protest data + changing all na values
+
+```{r}
+vote_2020_protest <- left_join(vote_2020, protests_geom, by="fips")
+
+vote_2020_protest$num_escalations[is.na(vote_2020_protest$num_escalations)] <- 0
+
+vote_2020_protest <- vote_2020_protest %>% # add escalate binary variable
+  mutate(escalated_b = ifelse(num_escalations == 0,0,1))
+
+vote_2020_protest$num_protests[is.na(vote_2020_protest$num_protests)] <- 0
+
+vote_2020_protest <- vote_2020_protest %>% # add if protest happened binary variable
+  mutate(protest_b = ifelse(num_protests == 0,0,1))
+
+vote_2020_protest <- vote_2020_protest %>% # don't need anymore
+  select(-geometry)
+
+# get statefp from counties dataset for fixed effects later
+counties_sub$fips <- as.character(counties_sub$fips)
+vote_2020_protest <- left_join(vote_2020_protest, counties_sub, by="fips")
+```
+
+### PART 3 - Running regressions on generated data
+#### 3a - effect between protest occurrence and escalation on Trump vote share
+
+```{r}
+vote_2020_protest$esc_prot_interact <- # hard-code interaction term b/c NAs
+  vote_2020_protest$escalated_b*vote_2020_protest$protest_b
+
+reg_prot_viol_vote <- lm(votes_gop ~ protest_b + esc_prot_interact, 
+                            data=vote_2020_protest) # looking at num votes
+
+reg_prot_viol_vote2 <- lm(per_gop ~ protest_b + esc_prot_interact, 
+                          data=vote_2020_protest) # looking at proportion of votes
+
+# num gop votes
+summary(reg_prot_viol_vote)
+
+# proportion gop votes
+summary(reg_prot_viol_vote2)
+```
+
+#### 3b - effect between protest counts and escalation on Trump vote share
+
+```{r}
+reg_prot_cnt_viol_vote <- lm(votes_gop ~ num_protests + escalated_b*num_protests, 
+                             data=vote_2020_protest) # num gop votes
+reg_prot_cnt_viol_vote2 <- lm(per_gop ~ num_protests + escalated_b*num_protests, 
+                              data=vote_2020_protest) # proportion gop votes
+
+# num gop votes
+summary(reg_prot_cnt_viol_vote)
+
+# proportion gop votes
+summary(reg_prot_cnt_viol_vote2)
+```
+
+## TASK 4 - Fixed Effects
+### PART 1 - effect between protest occurrence and escalation on Trump vote share
+
+```{r}
+fe_prot_viol_vote <- lm(
+  per_gop ~ protest_b + esc_prot_interact + factor(STATEFP),
+  data=vote_2020_protest)
+summary(fe_prot_viol_vote)
+```
+
+### Part 2 - effect between protest counts and escalation on Trump vote share
+
+```{r}
+prot_cnt_viol_vote_fe <- lm(
+  per_gop ~ num_protests + escalated_b*num_protests + factor(STATEFP),
+  data=vote_2020_protest)
+summary(prot_cnt_viol_vote_fe)
+```
+
+## EXTRA 1 - income inequality data below
+### PART 1: joining gini index data with us counties data to get fips codes
+
+```{r warning=FALSE}
+counties_fips_geo <- us_counties %>% # to make join easier
+  select(GEOID, fips)
+
+counties_fips_geo <- st_transform(counties_fips_geo, 4326)
+
+gini_geom <- left_join(gini_index, counties_fips_geo, by = "GEOID")
+
+gini_geom <- gini_geom %>%
+  rename(coefficient = estimate) %>%
+  select(-moe)
+```
+
+### PART 2: joining protest data with gini data to get index for each protest county + map
+#### 2a - joining gini and protest data
+
+```{r warning=FALSE}
+protests_fips <- protests %>% # creating additional lat/long for later mapping
+  select(longitude, latitude, size:state_deployed_national_guard) %>%
+  mutate(longitude.1 = longitude,
+         latitude.1 = latitude)
+
+protests_fips <- st_as_sf( # to join with county data to get fips
+  protests_fips,
+  coords = c("longitude.1", "latitude.1"),
+  crs = 4326
+)
+
+counties_fips <- counties_fips_geo %>%
+  select(-GEOID)
+
+protests_fips <- st_join( # joining protest and county to get protest/county
+  protests_fips,
+  counties_fips,
+  join = st_within
+)
+
+gini_fips <- gini_geom %>% # get just gini coefs and fips
+  select(fips, coefficient)
+
+protests_fips_gini <- left_join(protests_fips, gini_fips, by = "fips")
+
+protests_fips_gini <- rename(protests_fips_gini, gini_coef = coefficient)
+
+protests_fips_gini_trans <- usmap_transform(protests_fips_gini)
+```
+
+#### 2b - mapping protests by gini coef
+
+```{r echo=FALSE, out.width="80%", fig.align='center'}
+plot_usmap(fill="darkolivegreen", alpha=0.35, color="white") +
+  geom_point(data=protests_fips_gini_trans, aes(x=longitude.1, y=latitude.1, color=gini_coef),
+             size=2) +
+  theme(
+    panel.background = element_rect(color = "black", fill = "aliceblue"),
+    plot.title = element_text(size=12),
+    plot.subtitle = element_text(size=10),
+  ) +
+  scale_color_viridis(
+    option = "magma"
+    )+
+  labs (
+    title = "Location of George Floyd Protests by Gini Coefficient, Summer 2020",
+    subtitle = "Sources: Ipsos and American Community Survey 2019",
+    color="Gini Coef.")
+```
+
+### PART 3: add ginis to data on unique fips + protests
+#### 3a - add fips to protests_geom data to get protests counts + coef per fip
+
+```{r}
+gini_fips$fips <- as.character(gini_fips$fips)
+
+pro_fips_uniq <- left_join(protests_geom, gini_fips, by="fips")
+
+pro_fips_uniq <- pro_fips_uniq %>%
+  rename(gini_coef = coefficient)
+
+# 3b: join with votes
+vote_2020_gini <- left_join(vote_2020, gini_fips, by="fips") # to get coefs for each fip
+
+vote_2020_gini <- left_join(vote_2020_gini, pro_fips_uniq, by="fips") # to get protest data
+
+vote_2020_gini <- vote_2020_gini %>% # drop unnecessary/duplicate variables
+  select(-geometry, -gini_coef)
+```
+
+
+```{r echo=FALSE}
+# fix NAs
+vote_2020_gini$num_protests[is.na(vote_2020_gini$num_protests)] <- 0
+vote_2020_gini$num_escalations[is.na(vote_2020_gini$num_escalations)] <- 0
+
+vote_2020_gini <- vote_2020_gini%>% # add binary variables
+  rename(gini_coef = coefficient) %>%
+  mutate(
+    escalate_b = ifelse(num_escalations==0,0,1),
+    protest_b = ifelse(num_protests==0,0,1)
+  )
+```
+
+### PART 4: Regressions
+```{r}
+reg_num_prot_gini <- lm(num_protests ~ gini_coef, data=vote_2020_gini)
+summary(reg_num_prot_gini) 
+```
+
+## EXTRA 2 - parler data below
+```{r setup4, echo=FALSE}
+library(lubridate)
+election_2020 <- as.Date("2020-11-03")
+jan_sixth <- as.Date("2021-01-06")
+prot_start <- as.Date("2020-05-28")
+prot_end <- as.Date("2020-06-25")
+```
+
+### PART 1: Mapping parler data by protests
+#### 1a - isolate us parler data by protest location
+
+```{r warning=FALSE}
+parler_data_geom <- parler_data %>%  # extra lat long vars for future mapping
+  mutate(longitude.1 = Longitude,
+         latitude.1 = Latitude)
+
+parler_data_geom <- st_as_sf( # gen geom for join with counties data
+  parler_data_geom,
+  coords=c("longitude.1", "latitude.1"),
+  crs = 4326
+)
+
+protests_fips_2 <- as.data.frame(protests_fips$fips) # get protest fips codes
+
+protests_fips_2<- rename(protests_fips_2, "fips" = "protests_fips$fips")
+
+
+parler_geom_us <- st_join( # add all us fips to parler data
+  parler_data_geom,
+  counties_fips,
+  join = st_within
+)
+
+parler_geom_us <- parler_geom_us[!is.na(parler_geom_us$fips),] # remove non us locations
+
+parler_geom_prot <- parler_geom_us %>% # only keep parler data where protests happened
+  semi_join(protests_fips_2)
+
+
+parler_geom_prot <- usmap_transform(parler_geom_prot) # transform for mapping
+```
+
+#### 1b - map general parler data before and after protests start
+
+```{r echo=FALSE, out.width="90%", fig.align='center'}
+parler_geom_prot <- parler_geom_prot[-c(3472),] # remove random outlier point
+
+parler_geom_prot <- parler_geom_prot %>% # create variable for activity pre/post protests
+  mutate(post_protest = ifelse(Timestamp < prot_start, 0, 1))
+
+parler_geom_prot$post_protest2 <-  # labels for facet wrap map
+  factor(parler_geom_prot$post_protest, labels 
+         = c("Before May 28, 2020", "After May 28, 2020"))
+
+
+plot_usmap(fill="darkolivegreen", alpha=0.35, color="white") +
+  geom_point(data=parler_geom_prot, aes(x=Longitude.1, y=Latitude.1),
+             color = "red4", alpha = 0.25, size=2) +
+  theme(
+    panel.background = element_rect(color = "black", fill = "aliceblue"),
+    plot.title = element_text(size=14),
+    plot.subtitle = element_text(size=12)
+  ) +
+  facet_wrap(
+    .~post_protest2,
+  ) +
+  labs (
+    title = "Parler Activity Before and After Protests Start")
+```
+
